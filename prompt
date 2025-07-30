@@ -1,0 +1,15 @@
+- 技术栈使用 React/Typescript/Antd、Hook 的方式编写代码，Python API 分别在 front 和 python 下实现
+  - backend
+    - Python 使用 sanic + tortoise 实现
+    - 拆分 views.py、models.py、utils.py、handler.py
+    - 数据库用 mysql
+  - 后端仅存储 Agent 的配置，与 MCP 的列表
+- 实现一个左边带历史记录的 tab 框，右边是对话框的 chat 页面
+- 前端直接在浏览器里缓存交互的历史记录
+- chat 页面是支持 MCP 的 Agent
+  - 可配置提示词
+  - 可配置 MCP 列表
+  - 支持 API 来请求指定 Agent
+  - Agent 支持 MCP 的调用
+  - Agent 再返回数据的时候支持流式响应
+- 一个 Agent 的实体 = 提示词 + chatgpt 的 API + MCP 的绑定
