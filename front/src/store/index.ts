@@ -22,6 +22,7 @@ interface AppState {
   setCurrentSession: (session: ChatSession | null) => void;
   addMessage: (sessionId: string, message: ChatMessage) => void;
   createSession: (agent: Agent, title?: string) => ChatSession;
+  updateSessionTitle: (sessionId: string, newTitle: string) => void;
   deleteSession: (sessionId: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -92,6 +93,25 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     return newSession;
   },
+
+  updateSessionTitle: (sessionId, newTitle) => set((state) => {
+    const updatedSessions = state.sessions.map(session =>
+      session.id === sessionId
+        ? { ...session, title: newTitle, updated_at: new Date().toISOString() }
+        : session
+    );
+
+    const updatedCurrentSession = state.currentSession?.id === sessionId
+      ? { ...state.currentSession, title: newTitle, updated_at: new Date().toISOString() }
+      : state.currentSession;
+
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(updatedSessions));
+
+    return {
+      sessions: updatedSessions,
+      currentSession: updatedCurrentSession
+    };
+  }),
 
   deleteSession: (sessionId) => set((state) => {
     const updatedSessions = state.sessions.filter(s => s.id !== sessionId);
