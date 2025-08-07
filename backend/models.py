@@ -30,26 +30,26 @@ class Agent(Model):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
 
-class MCPTool(Model):
-    """MCP 工具模型"""
+class MCPServer(Model):
+    """MCP 服务器模型"""
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=100, unique=True)
     description = fields.TextField()
-    config = fields.JSONField(default=dict)  # 工具配置
+    api_url = fields.CharField(max_length=500)  # HTTP API 地址
     is_active = fields.BooleanField(default=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
-    
+
     class Meta:
-        table = "mcp_tools"
-    
+        table = "mcp_servers"
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
             "id": self.id,
             "name": self.name,
             "description": self.description,
-            "config": self.config or {},
+            "api_url": self.api_url,
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None

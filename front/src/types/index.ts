@@ -28,3 +28,14 @@ export interface ChatMessage {
   content: string;
   created_at: string;
 }
+
+// MCP 服务器类型定义
+export interface MCPServer {
+  id: number;
+  name: string;
+  description: string;
+  api_url: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}

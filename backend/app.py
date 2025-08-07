@@ -3,7 +3,7 @@ from sanic_cors import CORS
 from tortoise.contrib.sanic import register_tortoise
 from views import api
 from utils import get_env_config, get_database_url, logger
-from models import Agent, MCPTool
+from models import Agent, MCPServer
 
 # 创建 Sanic 应用
 app = Sanic("ai-agents-api")
@@ -32,79 +32,21 @@ register_tortoise(
 async def init_data(app, loop):
     """初始化数据"""
     try:
-        # 创建默认的 MCP 工具
-        default_tools = [
-            {
-                "name": "file_reader",
-                "description": "读取文件内容",
-                "config": {
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "文件路径"
-                            }
-                        },
-                        "required": ["file_path"]
-                    }
-                }
-            },
-            {
-                "name": "web_search",
-                "description": "网络搜索",
-                "config": {
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "搜索查询"
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "name": "calculator",
-                "description": "数学计算",
-                "config": {
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "expression": {
-                                "type": "string",
-                                "description": "数学表达式"
-                            }
-                        },
-                        "required": ["expression"]
-                    }
-                }
-            }
-        ]
+        # MCP 工具管理已移除 - 现在由独立的 MCP 服务器处理
         
-        for tool_data in default_tools:
-            existing_tool = await MCPTool.filter(name=tool_data["name"]).first()
-            if not existing_tool:
-                await MCPTool.create(**tool_data)
-                logger.info(f"创建默认 MCP 工具: {tool_data['name']}")
-        
-        # 创建默认 Agent
-        default_agent = await Agent.filter(name="默认助手").first()
-        if not default_agent:
-            await Agent.create(
-                name="默认助手",
-                description="一个通用的AI助手",
-                prompt="你是一个有用的AI助手。请友好、准确地回答用户的问题。",
-                mcp_tools=["calculator"],
-                openai_config={
-                    "model": "gpt-3.5-turbo",
-                    "temperature": 0.7,
-                    "max_tokens": 2000
-                }
+        # 创建默认的 MCP 服务器（如果不存在）
+        default_server = await MCPServer.filter(name="time_server").first()
+        if not default_server:
+            await MCPServer.create(
+                name="time_server",
+                description="时间工具服务器",
+                api_url="stdio://time_server.py",  # 使用 stdio 协议
+                is_active=True
             )
-            logger.info("创建默认 Agent")
+            logger.info("创建默认 MCP 服务器: time_server")
+
+        # 不再自动创建默认 Agent - 让用户手动创建
+        logger.info("系统启动完成，等待用户创建 Agent")
             
     except Exception as e:
         logger.error(f"初始化数据失败: {str(e)}")

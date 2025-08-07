@@ -56,10 +56,8 @@ def validate_agent_data(data: Dict[str, Any]) -> List[str]:
 
 def get_database_url() -> str:
     """获取数据库连接URL"""
-    # 暂时使用 SQLite 进行测试，生产环境可以切换到 MySQL
-    return "sqlite://agents.db"
-    # config = get_env_config()
-    # return f"mysql://{config['MYSQL_USER']}:{config['MYSQL_PASSWORD']}@{config['MYSQL_HOST']}:{config['MYSQL_PORT']}/{config['MYSQL_DATABASE']}"
+    # 使用 MySQL 数据库
+    return "mysql://root:123456@localhost:3306/ai_agents"
 
 def parse_request_json(request: Request) -> Dict[str, Any]:
     """解析请求JSON数据"""

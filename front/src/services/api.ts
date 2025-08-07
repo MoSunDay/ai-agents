@@ -88,4 +88,46 @@ export const chatApi = {
   },
 };
 
+// MCP 服务器相关 API
+export const mcpApi = {
+  // 获取所有 MCP 服务器
+  getServers: async () => {
+    const response = await api.get('/mcp/servers');
+    return response.data;
+  },
+
+  // 创建 MCP 服务器
+  createServer: async (serverData: {
+    name: string;
+    description: string;
+    api_url: string;
+    is_active?: boolean;
+  }) => {
+    const response = await api.post('/mcp/servers', serverData);
+    return response.data;
+  },
+
+  // 更新 MCP 服务器
+  updateServer: async (id: number, serverData: Partial<{
+    name: string;
+    description: string;
+    api_url: string;
+    is_active: boolean;
+  }>) => {
+    const response = await api.put(`/mcp/servers/${id}`, serverData);
+    return response.data;
+  },
+
+  // 删除 MCP 服务器
+  deleteServer: async (id: number) => {
+    await api.delete(`/mcp/servers/${id}`);
+  },
+
+  // 获取指定服务器的工具列表
+  getServerTools: async (serverName: string) => {
+    const response = await api.get(`/mcp/servers/${serverName}/tools`);
+    return response.data;
+  },
+};
+
 export default api;

@@ -1,28 +1,31 @@
 import openai
 import asyncio
 import json
+import os
 from typing import Dict, Any, List, AsyncGenerator
-from models import Agent, MCPTool
-from utils import get_env_config, logger, format_openai_messages
+from models import Agent
+from utils import logger, format_openai_messages
 
 # MCP imports
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import mcp.types as mcp_types
 
+
 class OpenAIHandler:
     """OpenAI API 处理器"""
-    
+
     def __init__(self):
-        config = get_env_config()
+        # 使用自定义的 OpenAI 兼容接口
         self.client = openai.AsyncOpenAI(
-            api_key=config["OPENAI_API_KEY"]
+            api_key="dummy-key",  # 免验证接口不需要真实 API key
+            base_url="http://192.168.31.159:8088/api/v1/gpt/v1"  # 自定义接口地址
         )
-    
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
-        model: str = "gpt-3.5-turbo",
+        model: str = "qwen3:32b",
         temperature: float = 0.7,
         max_tokens: int = None,
         stream: bool = False
@@ -35,20 +38,37 @@ class OpenAIHandler:
                 "temperature": temperature,
                 "stream": stream
             }
-
+            
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
-
+            
             response = await self.client.chat.completions.create(**kwargs)
 
             if stream:
                 return response
             else:
-                return {
-                    "content": response.choices[0].message.content,
-                    "role": response.choices[0].message.role,
-                    "usage": response.usage.dict() if response.usage else None
-                }
+                # 处理不同的响应格式
+                if isinstance(response, str):
+                    # 如果返回的是字符串，直接使用
+                    return {
+                        "content": response,
+                        "role": "assistant",
+                        "usage": {"total_tokens": 50}
+                    }
+                elif hasattr(response, 'choices') and response.choices:
+                    # 标准 OpenAI 格式
+                    return {
+                        "content": response.choices[0].message.content,
+                        "role": response.choices[0].message.role,
+                        "usage": response.usage.dict() if response.usage else None
+                    }
+                else:
+                    # 其他格式，尝试解析
+                    return {
+                        "content": str(response),
+                        "role": "assistant",
+                        "usage": {"total_tokens": 50}
+                    }
         except Exception as e:
             logger.error(f"OpenAI API 调用失败: {str(e)}")
             # 返回模拟响应用于测试
@@ -58,11 +78,40 @@ class OpenAIHandler:
                 "usage": {"total_tokens": 50}
             }
 
+    async def chat_completion_stream(
+        self,
+        messages: List[Dict[str, str]],
+        model: str = "qwen3:32b",
+        temperature: float = 0.7,
+        max_tokens: int = None
+    ) -> AsyncGenerator[str, None]:
+        """流式调用 OpenAI Chat Completion API"""
+        try:
+            kwargs = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True
+            }
+
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+
+            response = await self.client.chat.completions.create(**kwargs)
+
+            async for chunk in response:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        except Exception as e:
+            logger.error(f"OpenAI API 流式调用失败: {str(e)}")
+            yield f"流式调用失败: {str(e)}"
+
     async def chat_completion_with_tools(
         self,
         messages: List[Dict[str, str]],
         tools: List[Dict[str, Any]],
-        model: str = "gpt-3.5-turbo",
+        model: str = "qwen3:32b",
         temperature: float = 0.7,
         max_tokens: int = None
     ) -> Dict[str, Any]:
@@ -81,28 +130,45 @@ class OpenAIHandler:
 
             response = await self.client.chat.completions.create(**kwargs)
 
-            message = response.choices[0].message
-            result = {
-                "content": message.content,
-                "role": message.role,
-                "usage": response.usage.dict() if response.usage else None
-            }
+            # 处理不同的响应格式
+            if isinstance(response, str):
+                # 如果返回的是字符串，直接使用（不支持工具调用）
+                return {
+                    "content": response,
+                    "role": "assistant",
+                    "usage": {"total_tokens": 50}
+                }
+            elif hasattr(response, 'choices') and response.choices:
+                # 标准 OpenAI 格式
+                message = response.choices[0].message
+                result = {
+                    "content": message.content,
+                    "role": message.role,
+                    "usage": response.usage.dict() if response.usage else None
+                }
 
-            # 检查是否有工具调用
-            if message.tool_calls:
-                result["tool_calls"] = [
-                    {
-                        "id": tool_call.id,
-                        "type": tool_call.type,
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments
+                # 检查是否有工具调用
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    result["tool_calls"] = [
+                        {
+                            "id": tool_call.id,
+                            "type": tool_call.type,
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments
+                            }
                         }
-                    }
-                    for tool_call in message.tool_calls
-                ]
+                        for tool_call in message.tool_calls
+                    ]
 
-            return result
+                return result
+            else:
+                # 其他格式
+                return {
+                    "content": str(response),
+                    "role": "assistant",
+                    "usage": {"total_tokens": 50}
+                }
 
         except Exception as e:
             logger.error(f"OpenAI API 工具调用失败: {str(e)}")
@@ -112,126 +178,41 @@ class OpenAIHandler:
                 "role": "assistant",
                 "usage": {"total_tokens": 50}
             }
-    
-    async def chat_completion_stream(
-        self,
-        messages: List[Dict[str, str]],
-        model: str = "gpt-3.5-turbo",
-        temperature: float = 0.7,
-        max_tokens: int = None
-    ) -> AsyncGenerator[str, None]:
-        """流式调用 OpenAI Chat Completion API"""
-        try:
-            kwargs = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "stream": True
-            }
-            
-            if max_tokens:
-                kwargs["max_tokens"] = max_tokens
-            
-            stream = await self.client.chat.completions.create(**kwargs)
-            
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
-                    
-        except Exception as e:
-            logger.error(f"OpenAI 流式 API 调用失败: {str(e)}")
-            # 返回模拟流式响应用于测试
-            response_text = f"这是一个模拟的流式AI回复。原始消息: {messages[-1]['content'] if messages else ''}"
-            for word in response_text.split():
-                yield word + " "
-                await asyncio.sleep(0.1)
 
-class MCPHandler:
+
+class MCPClientHandler:
     """MCP 客户端处理器 - 连接到外部 MCP 服务器"""
 
     def __init__(self):
-        self.active_connections = {}
+        # 获取项目根目录
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        time_server_path = os.path.join(project_root, "mcp_example", "time_server.py")
+
+        # 配置可用的 MCP 服务器
         self.mcp_servers = {
-            # 配置可用的 MCP 服务器
-            "file_operations": {
+            "time_server": {
                 "command": "python",
-                "args": ["-m", "mcp_file_server"],  # 假设的文件操作 MCP 服务器
-                "description": "文件操作工具"
-            },
-            "web_search": {
-                "command": "python",
-                "args": ["-m", "mcp_web_search"],  # 假设的网络搜索 MCP 服务器
-                "description": "网络搜索工具"
-            },
-            "code_execution": {
-                "command": "python",
-                "args": ["-m", "mcp_code_runner"],  # 假设的代码执行 MCP 服务器
-                "description": "代码执行工具"
+                "args": [time_server_path, "stdio"],
+                "description": "时间工具服务器",
+                "tools": ["get_current_time", "get_timestamp", "get_time_info"]
             }
         }
 
-    async def list_available_tools(self) -> List[Dict[str, Any]]:
-        """获取可用的 MCP 工具列表"""
-        try:
-            # 从数据库获取配置的工具
-            tools = await MCPTool.filter(is_active=True).all()
-            available_tools = []
-
-            for tool in tools:
-                # 检查对应的 MCP 服务器是否可用
-                if tool.name in self.mcp_servers:
-                    available_tools.append({
-                        "name": tool.name,
-                        "description": tool.description,
-                        "server_config": self.mcp_servers[tool.name],
-                        "config": tool.config
-                    })
-                else:
-                    # 对于没有对应 MCP 服务器的工具，返回基本信息
-                    available_tools.append(tool.to_dict())
-
-            return available_tools
-        except Exception as e:
-            logger.error(f"获取 MCP 工具列表失败: {str(e)}")
-            return []
-    
-    async def call_tool(
+    async def call_mcp_tool(
         self,
+        server_name: str,
         tool_name: str,
         parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """调用 MCP 工具 - 连接到真实的 MCP 服务器"""
+        """调用 MCP 服务器上的工具"""
         try:
-            tool = await MCPTool.filter(name=tool_name, is_active=True).first()
-            if not tool:
+            if server_name not in self.mcp_servers:
                 return {
                     "success": False,
-                    "error": f"工具 {tool_name} 不存在或未激活"
+                    "error": f"MCP 服务器 {server_name} 不存在"
                 }
 
-            # 检查是否有对应的 MCP 服务器配置
-            if tool_name in self.mcp_servers:
-                return await self._call_mcp_server_tool(tool_name, parameters)
-            else:
-                # 回退到模拟实现
-                logger.warning(f"工具 {tool_name} 没有对应的 MCP 服务器，使用模拟实现")
-                return await self._call_mock_tool(tool_name, parameters)
-
-        except Exception as e:
-            logger.error(f"调用 MCP 工具失败: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    async def _call_mcp_server_tool(
-        self,
-        tool_name: str,
-        parameters: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """连接到 MCP 服务器并调用工具"""
-        try:
-            server_config = self.mcp_servers[tool_name]
+            server_config = self.mcp_servers[server_name]
 
             # 创建 MCP 服务器参数
             server_params = StdioServerParameters(
@@ -245,32 +226,8 @@ class MCPHandler:
                     # 初始化连接
                     await session.initialize()
 
-                    # 列出可用工具
-                    tools_response = await session.list_tools()
-                    available_tools = [tool.name for tool in tools_response.tools]
-
-                    logger.info(f"MCP 服务器 {tool_name} 可用工具: {available_tools}")
-
-                    # 查找匹配的工具
-                    target_tool = None
-                    for tool in tools_response.tools:
-                        if tool.name == tool_name or tool_name in tool.name:
-                            target_tool = tool
-                            break
-
-                    if not target_tool and available_tools:
-                        # 如果没有完全匹配，使用第一个可用工具
-                        target_tool = tools_response.tools[0]
-                        logger.info(f"使用第一个可用工具: {target_tool.name}")
-
-                    if not target_tool:
-                        return {
-                            "success": False,
-                            "error": f"MCP 服务器中没有找到工具 {tool_name}"
-                        }
-
                     # 调用工具
-                    result = await session.call_tool(target_tool.name, arguments=parameters)
+                    result = await session.call_tool(tool_name, arguments=parameters)
 
                     # 处理结果
                     if result.isError:
@@ -289,336 +246,157 @@ class MCPHandler:
                             if isinstance(content, mcp_types.TextContent):
                                 result_content += content.text
 
-                        # 如果有结构化内容，也包含进来
-                        structured_result = None
-                        if hasattr(result, 'structuredContent') and result.structuredContent:
-                            structured_result = result.structuredContent
-
                         return {
                             "success": True,
-                            "result": {
-                                "tool_name": target_tool.name,
-                                "content": result_content,
-                                "structured_content": structured_result,
-                                "parameters": parameters
-                            }
+                            "result": result_content
                         }
 
         except Exception as e:
             logger.error(f"MCP 服务器调用失败: {str(e)}")
-            # 如果 MCP 服务器调用失败，回退到模拟实现
-            logger.info(f"回退到模拟实现: {tool_name}")
-            return await self._call_mock_tool(tool_name, parameters)
-
-    async def _call_mock_tool(
-        self,
-        tool_name: str,
-        parameters: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """模拟工具调用 - 当 MCP 服务器不可用时使用"""
-        if tool_name == "file_operations":
-            return await self._handle_file_operations(parameters)
-        elif tool_name == "web_search":
-            return await self._handle_web_search(parameters)
-        elif tool_name == "code_execution":
-            return await self._handle_code_execution(parameters)
-        elif tool_name == "database":
-            return await self._handle_database(parameters)
-        elif tool_name == "api_client":
-            return await self._handle_api_client(parameters)
-        else:
-            return await self._handle_generic_tool(tool_name, parameters)
-
-    async def _handle_file_operations(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理文件操作工具"""
-        operation = parameters.get("operation", "read")
-        file_path = parameters.get("file_path")
-
-        if operation == "read":
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                return {
-                    "success": True,
-                    "result": {
-                        "operation": "read",
-                        "file_path": file_path,
-                        "content": content[:2000] + "..." if len(content) > 2000 else content
-                    }
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"读取文件失败: {str(e)}"
-                }
-        elif operation == "write":
-            content = parameters.get("content", "")
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                return {
-                    "success": True,
-                    "result": {
-                        "operation": "write",
-                        "file_path": file_path,
-                        "bytes_written": len(content.encode('utf-8'))
-                    }
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"写入文件失败: {str(e)}"
-                }
-        else:
             return {
                 "success": False,
-                "error": f"不支持的文件操作: {operation}"
+                "error": str(e)
             }
 
-    async def _handle_web_search(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理网络搜索工具"""
-        query = parameters.get("query")
-        max_results = parameters.get("max_results", 5)
-
-        # 模拟搜索结果
-        results = []
-        for i in range(min(max_results, 3)):
-            results.append({
-                "title": f"搜索结果 {i+1} for '{query}'",
-                "url": f"https://example.com/result-{i+1}",
-                "snippet": f"这是关于 '{query}' 的搜索结果 {i+1}。包含相关信息和详细描述...",
-                "relevance_score": 0.9 - i * 0.1
-            })
-
-        return {
-            "success": True,
-            "result": {
-                "query": query,
-                "total_results": len(results),
-                "results": results
-            }
-        }
-
-    async def _handle_code_execution(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理代码执行工具"""
-        code = parameters.get("code")
-        language = parameters.get("language", "python")
-
-        if language == "python":
-            try:
-                # 注意：实际生产环境中需要安全的代码执行环境
-                import io
-                from contextlib import redirect_stdout, redirect_stderr
-
-                stdout_buffer = io.StringIO()
-                stderr_buffer = io.StringIO()
-
-                with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-                    exec(code)
-
-                stdout_content = stdout_buffer.getvalue()
-                stderr_content = stderr_buffer.getvalue()
-
-                return {
-                    "success": True,
-                    "result": {
-                        "language": language,
-                        "code": code,
-                        "stdout": stdout_content,
-                        "stderr": stderr_content,
-                        "execution_time": "0.1s"
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """获取所有可用的 MCP 工具"""
+        tools = []
+        for server_name, server_config in self.mcp_servers.items():
+            for tool_name in server_config.get("tools", []):
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": f"{server_name}_{tool_name}",
+                        "description": f"{server_config['description']} - {tool_name}",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "format": {
+                                    "type": "string",
+                                    "description": "时间格式（可选）"
+                                }
+                            }
+                        }
                     }
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"代码执行失败: {str(e)}"
-                }
-        else:
-            return {
-                "success": False,
-                "error": f"不支持的编程语言: {language}"
+                })
+        return tools
+
+    def get_mcp_servers_info(self) -> Dict[str, Any]:
+        """获取所有 MCP 服务器信息"""
+        servers_info = {}
+        for server_name, server_config in self.mcp_servers.items():
+            servers_info[server_name] = {
+                "name": server_name,
+                "description": server_config["description"],
+                "tools": server_config.get("tools", []),
+                "command": server_config["command"],
+                "args": server_config["args"]
             }
+        return servers_info
 
-    async def _handle_database(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理数据库工具"""
-        query = parameters.get("query")
-        database = parameters.get("database", "default")
-
-        # 模拟数据库查询
-        return {
-            "success": True,
-            "result": {
-                "database": database,
-                "query": query,
-                "rows_affected": 1,
-                "data": [
-                    {"id": 1, "name": "示例数据", "value": "模拟结果"}
-                ],
-                "execution_time": "0.05s"
-            }
-        }
-
-    async def _handle_api_client(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理 API 客户端工具"""
-        url = parameters.get("url")
-        method = parameters.get("method", "GET")
-        headers = parameters.get("headers", {})
-        data = parameters.get("data")
-
-        # 模拟 API 调用
-        return {
-            "success": True,
-            "result": {
-                "url": url,
-                "method": method,
-                "headers": headers,
-                "request_data": data,
-                "status_code": 200,
-                "response": {
-                    "message": "API 调用成功",
-                    "data": "模拟的 API 响应数据"
-                },
-                "response_time": "0.2s"
-            }
-        }
-
-    async def _handle_generic_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """处理通用工具"""
-        return {
-            "success": True,
-            "result": {
-                "tool": tool_name,
-                "parameters": parameters,
-                "message": f"工具 {tool_name} 执行成功",
-                "timestamp": "2024-01-01T00:00:00Z"
-            }
-        }
-    
-    async def _mock_file_reader(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """模拟文件读取工具"""
-        file_path = parameters.get("file_path")
+    async def get_server_tools_dynamic(self, server_name: str) -> List[Dict[str, Any]]:
+        """动态获取 MCP 服务器的工具列表"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            return {
-                "success": True,
-                "result": {
-                    "file_path": file_path,
-                    "content": content[:1000] + "..." if len(content) > 1000 else content
-                }
-            }
+            if server_name not in self.mcp_servers:
+                return []
+
+            server_config = self.mcp_servers[server_name]
+
+            # 创建 MCP 服务器参数
+            server_params = StdioServerParameters(
+                command=server_config["command"],
+                args=server_config["args"]
+            )
+
+            # 连接到 MCP 服务器获取工具列表
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    # 初始化连接
+                    await session.initialize()
+
+                    # 列出可用工具
+                    tools_response = await session.list_tools()
+
+                    tools = []
+                    for tool in tools_response.tools:
+                        tools.append({
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                        })
+
+                    return tools
+
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"读取文件失败: {str(e)}"
-            }
-    
-    async def _mock_web_search(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """模拟网络搜索工具"""
-        query = parameters.get("query")
-        return {
-            "success": True,
-            "result": {
-                "query": query,
-                "results": [
-                    {
-                        "title": f"搜索结果 1 for '{query}'",
-                        "url": "https://example.com/1",
-                        "snippet": "这是一个模拟的搜索结果..."
-                    }
-                ]
-            }
-        }
-    
-    async def _mock_calculator(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """模拟计算器工具"""
-        expression = parameters.get("expression")
-        try:
-            result = eval(expression)
-            return {
-                "success": True,
-                "result": {
-                    "expression": expression,
-                    "result": result
-                }
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"计算失败: {str(e)}"
-            }
+            logger.error(f"获取 MCP 服务器 {server_name} 工具列表失败: {str(e)}")
+            # 回退到静态配置
+            return [{"name": tool, "description": f"{server_name} 工具"}
+                   for tool in self.mcp_servers[server_name].get("tools", [])]
+
 
 class AgentHandler:
-    """Agent 处理器"""
-    
+    """Agent 处理器 - 管理 Agent 并与 MCP 服务器交互"""
+
     def __init__(self):
         self.openai_handler = OpenAIHandler()
-        self.mcp_handler = MCPHandler()
-    
+        self.mcp_handler = MCPClientHandler()
+
     async def process_message(
         self,
         agent_id: int,
         messages: List[Dict[str, str]],
         stream: bool = False
     ) -> Dict[str, Any]:
-        """处理消息并生成回复，支持 MCP 工具调用"""
+        """处理消息并生成回复 - 支持 MCP 工具调用"""
         try:
             agent = await Agent.get(id=agent_id)
 
             # 格式化消息
             formatted_messages = format_openai_messages(agent.prompt, messages)
 
-            # 获取 Agent 绑定的 MCP 工具
-            agent_tools = agent.mcp_tools or []
-            available_tools = []
-
-            if agent_tools:
-                # 获取工具定义
-                for tool_name in agent_tools:
-                    tool = await MCPTool.filter(name=tool_name, is_active=True).first()
-                    if tool:
-                        available_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.config.get("parameters", {})
-                            }
-                        })
-
             # 获取 OpenAI 配置
             openai_config = agent.openai_config or {}
-            model = openai_config.get("model", "gpt-3.5-turbo")
+            model = openai_config.get("model", "qwen3:32b")
             temperature = openai_config.get("temperature", 0.7)
             max_tokens = openai_config.get("max_tokens")
 
-            # 如果有可用工具，使用 function calling
-            if available_tools:
-                return await self._process_with_tools(
-                    formatted_messages,
-                    available_tools,
-                    model,
-                    temperature,
-                    max_tokens,
-                    stream
+            # 检查 Agent 是否配置了 MCP 工具
+            agent_tools = agent.mcp_tools or []
+
+            if agent_tools and not stream:  # 工具调用暂不支持流式
+                # 获取可用工具
+                available_tools = self.mcp_handler.get_available_tools()
+
+                # 过滤 Agent 配置的工具
+                filtered_tools = [
+                    tool for tool in available_tools
+                    if any(mcp_tool in tool["function"]["name"] for mcp_tool in agent_tools)
+                ]
+
+                if filtered_tools:
+                    return await self._process_with_tools(
+                        formatted_messages,
+                        filtered_tools,
+                        model,
+                        temperature,
+                        max_tokens
+                    )
+
+            # 没有工具或使用流式时，直接调用 OpenAI
+            if stream:
+                return await self.openai_handler.chat_completion_stream(
+                    messages=formatted_messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens
                 )
             else:
-                # 没有工具时，直接调用 OpenAI
-                if stream:
-                    return await self.openai_handler.chat_completion_stream(
-                        messages=formatted_messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                else:
-                    return await self.openai_handler.chat_completion(
-                        messages=formatted_messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
+                return await self.openai_handler.chat_completion(
+                    messages=formatted_messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
 
         except Agent.DoesNotExist:
             return {
@@ -638,14 +416,10 @@ class AgentHandler:
         tools: List[Dict[str, Any]],
         model: str,
         temperature: float,
-        max_tokens: int,
-        stream: bool = False
+        max_tokens: int
     ) -> Dict[str, Any]:
         """使用工具处理消息"""
         try:
-            # 注意：工具调用暂不支持流式响应
-            if stream:
-                logger.warning("工具调用模式下暂不支持流式响应，将使用普通响应")
             # 第一次调用 OpenAI，可能会返回工具调用
             response = await self.openai_handler.chat_completion_with_tools(
                 messages=messages,
@@ -669,8 +443,17 @@ class AgentHandler:
                     function_name = tool_call["function"]["name"]
                     function_args = json.loads(tool_call["function"]["arguments"])
 
+                    # 解析服务器名和工具名
+                    if "_" in function_name:
+                        server_name, tool_name = function_name.split("_", 1)
+                    else:
+                        server_name = "time_server"
+                        tool_name = function_name
+
                     # 调用 MCP 工具
-                    tool_result = await self.mcp_handler.call_tool(function_name, function_args)
+                    tool_result = await self.mcp_handler.call_mcp_tool(
+                        server_name, tool_name, function_args
+                    )
 
                     # 添加工具结果到消息历史
                     messages.append({
@@ -699,7 +482,56 @@ class AgentHandler:
                 "error": str(e)
             }
 
-# 全局实例
-openai_handler = OpenAIHandler()
-mcp_handler = MCPHandler()
-agent_handler = AgentHandler()
+    async def get_agent_info(self, agent_id: int) -> Dict[str, Any]:
+        """获取 Agent 信息"""
+        try:
+            agent = await Agent.get(id=agent_id)
+            return {
+                "success": True,
+                "agent": {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "description": agent.description,
+                    "prompt": agent.prompt,
+                    "mcp_tools": agent.mcp_tools,
+                    "openai_config": agent.openai_config,
+                    "created_at": agent.created_at.isoformat(),
+                    "updated_at": agent.updated_at.isoformat()
+                }
+            }
+        except Agent.DoesNotExist:
+            return {
+                "success": False,
+                "error": "Agent 不存在"
+            }
+        except Exception as e:
+            logger.error(f"获取 Agent 信息失败: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def list_agents(self) -> Dict[str, Any]:
+        """获取所有 Agent 列表"""
+        try:
+            agents = await Agent.all()
+            return {
+                "success": True,
+                "agents": [
+                    {
+                        "id": agent.id,
+                        "name": agent.name,
+                        "description": agent.description,
+                        "mcp_tools": agent.mcp_tools,
+                        "created_at": agent.created_at.isoformat(),
+                        "updated_at": agent.updated_at.isoformat()
+                    }
+                    for agent in agents
+                ]
+            }
+        except Exception as e:
+            logger.error(f"获取 Agent 列表失败: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }

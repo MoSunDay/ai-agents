@@ -1,10 +1,13 @@
 from sanic import Blueprint
 from sanic.response import json as sanic_json
 from sanic import Request
-from models import Agent, MCPTool
+from models import Agent, MCPServer
 from utils import success_response, error_response, validate_agent_data, parse_request_json
-from handler import agent_handler, mcp_handler
+from handler import AgentHandler
 import json
+
+# 创建 handler 实例
+agent_handler = AgentHandler()
 
 # 创建蓝图
 api = Blueprint("api", url_prefix="/api")
@@ -150,40 +153,92 @@ async def send_message_stream(request: Request):
     except Exception as e:
         return error_response(f"流式发送消息失败: {str(e)}", 500)
 
-# MCP 工具相关路由
-@api.route("/mcp/tools", methods=["GET"])
-async def list_mcp_tools(request: Request):
-    """获取所有 MCP 工具"""
+# MCP 服务器管理路由
+@api.route("/mcp/servers", methods=["GET"])
+async def list_mcp_servers(request: Request):
+    """获取所有 MCP 服务器"""
     try:
-        tools = await mcp_handler.list_available_tools()
-        return success_response(tools)
+        servers = await MCPServer.all()
+        return success_response([server.to_dict() for server in servers])
     except Exception as e:
-        return error_response(f"获取 MCP 工具列表失败: {str(e)}", 500)
+        return error_response(f"获取 MCP 服务器列表失败: {str(e)}", 500)
 
-@api.route("/mcp/tools", methods=["POST"])
-async def create_mcp_tool(request: Request):
-    """创建新的 MCP 工具"""
+@api.route("/mcp/servers", methods=["POST"])
+async def create_mcp_server(request: Request):
+    """创建新的 MCP 服务器"""
     try:
         data = parse_request_json(request)
-        
+
         if not data.get("name"):
-            return error_response("工具名称不能为空", 400)
-        
+            return error_response("服务器名称不能为空", 400)
+
+        if not data.get("api_url"):
+            return error_response("API 地址不能为空", 400)
+
         # 检查名称是否已存在
-        existing_tool = await MCPTool.filter(name=data["name"]).first()
-        if existing_tool:
-            return error_response("工具名称已存在", 400)
-        
-        tool = await MCPTool.create(
+        existing_server = await MCPServer.filter(name=data["name"]).first()
+        if existing_server:
+            return error_response("服务器名称已存在", 400)
+
+        server = await MCPServer.create(
             name=data["name"],
             description=data.get("description", ""),
-            config=data.get("config", {}),
+            api_url=data["api_url"],
             is_active=data.get("is_active", True)
         )
-        
-        return success_response(tool.to_dict(), "MCP 工具创建成功")
+
+        return success_response(server.to_dict(), "MCP 服务器创建成功")
     except Exception as e:
-        return error_response(f"创建 MCP 工具失败: {str(e)}", 500)
+        return error_response(f"创建 MCP 服务器失败: {str(e)}", 500)
+
+@api.route("/mcp/servers/<server_id:int>", methods=["PUT"])
+async def update_mcp_server(request: Request, server_id: int):
+    """更新 MCP 服务器"""
+    try:
+        data = parse_request_json(request)
+
+        server = await MCPServer.get(id=server_id)
+
+        # 如果要更新名称，检查是否与其他服务器重复
+        if "name" in data and data["name"] != server.name:
+            existing_server = await MCPServer.filter(name=data["name"]).first()
+            if existing_server:
+                return error_response("服务器名称已存在", 400)
+
+        # 更新字段
+        for field in ["name", "description", "api_url", "is_active"]:
+            if field in data:
+                setattr(server, field, data[field])
+
+        await server.save()
+
+        return success_response(server.to_dict(), "MCP 服务器更新成功")
+    except MCPServer.DoesNotExist:
+        return error_response("MCP 服务器不存在", 404)
+    except Exception as e:
+        return error_response(f"更新 MCP 服务器失败: {str(e)}", 500)
+
+@api.route("/mcp/servers/<server_id:int>", methods=["DELETE"])
+async def delete_mcp_server(request: Request, server_id: int):
+    """删除 MCP 服务器"""
+    try:
+        server = await MCPServer.get(id=server_id)
+        await server.delete()
+
+        return success_response(None, "MCP 服务器删除成功")
+    except MCPServer.DoesNotExist:
+        return error_response("MCP 服务器不存在", 404)
+    except Exception as e:
+        return error_response(f"删除 MCP 服务器失败: {str(e)}", 500)
+
+@api.route("/mcp/servers/<server_name>/tools", methods=["GET"])
+async def get_server_tools(request: Request, server_name: str):
+    """获取指定 MCP 服务器的工具列表"""
+    try:
+        tools = await agent_handler.mcp_handler.get_server_tools_dynamic(server_name)
+        return success_response(tools)
+    except Exception as e:
+        return error_response(f"获取服务器 {server_name} 工具列表失败: {str(e)}", 500)
 
 # 健康检查
 @api.route("/health", methods=["GET"])
