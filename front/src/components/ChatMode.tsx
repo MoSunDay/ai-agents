@@ -100,9 +100,8 @@ const ChatMode: React.FC<ChatModeProps> = ({ agents, onCreateSession }) => {
             height: '44px',
             fontWeight: 600,
             fontSize: '15px',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            border: 'none',
-            boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)'
+            background: '#667eea',
+            border: 'none'
           }}
         >
           新建对话

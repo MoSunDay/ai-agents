@@ -39,8 +39,8 @@ async def init_data(app, loop):
         if not default_server:
             await MCPServer.create(
                 name="time_server",
-                description="时间工具服务器",
-                api_url="stdio://time_server.py",  # 使用 stdio 协议
+                description="时间工具服务器(HTTP)",
+                api_url="http://127.0.0.1:8000",  # 使用 HTTP 协议，SSE 默认端口
                 is_active=True
             )
             logger.info("创建默认 MCP 服务器: time_server")
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     config = get_env_config()
     app.run(
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         debug=True,
         auto_reload=True
     )

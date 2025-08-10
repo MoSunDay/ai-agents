@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { Agent } from '../types';
 
 // API 基础配置
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = 'http://localhost:8001/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -33,13 +33,13 @@ api.interceptors.response.use(
 export const agentApi = {
   // 获取所有 Agent
   getAll: async (): Promise<Agent[]> => {
-    const response = await api.get('/agents/');
+    const response = await api.get('/agents');
     return response.data;
   },
   
   // 创建 Agent
   create: async (agentData: Omit<Agent, 'id' | 'created_at' | 'updated_at'>): Promise<Agent> => {
-    const response = await api.post('/agents/', agentData);
+    const response = await api.post('/agents', agentData);
     return response.data;
   },
   

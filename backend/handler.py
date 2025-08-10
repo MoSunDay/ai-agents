@@ -3,12 +3,18 @@ import asyncio
 import json
 import os
 from typing import Dict, Any, List, AsyncGenerator
-from models import Agent
+from models import Agent, MCPServer
 from utils import logger, format_openai_messages
 
 # MCP imports
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+# 尝试导入 SSE 客户端以支持 HTTP(S) 协议的 MCP 服务器
+try:
+    from mcp.client.sse import sse_client  # type: ignore
+except Exception:  # pragma: no cover
+    sse_client = None  # 动态检测
+
 import mcp.types as mcp_types
 
 
@@ -185,18 +191,29 @@ class MCPClientHandler:
 
     def __init__(self):
         # 获取项目根目录
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        time_server_path = os.path.join(project_root, "mcp_example", "time_server.py")
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 运行期从数据库动态加载服务器配置
+        self.mcp_servers: Dict[str, Dict[str, Any]] = {}
 
-        # 配置可用的 MCP 服务器
-        self.mcp_servers = {
-            "time_server": {
-                "command": "python",
-                "args": [time_server_path, "stdio"],
-                "description": "时间工具服务器",
-                "tools": ["get_current_time", "get_timestamp", "get_time_info"]
-            }
-        }
+    async def load_servers(self) -> None:
+        """从数据库动态加载 MCP 服务器配置到内存映射"""
+        try:
+            servers = await MCPServer.all()
+            mapping: Dict[str, Dict[str, Any]] = {}
+            for s in servers:
+                url = (s.api_url or '').strip()
+                # 仅支持 http(s) 协议
+                if url.startswith("http://") or url.startswith("https://"):
+                    mapping[s.name] = {
+                        "transport": "sse",
+                        "url": url,
+                        "description": s.description,
+                    }
+                else:
+                    logger.warning(f"不支持的 MCP api_url 协议: {url}")
+            self.mcp_servers = mapping
+        except Exception as e:
+            logger.error(f"加载 MCP 服务器配置失败: {str(e)}")
 
     async def call_mcp_tool(
         self,
@@ -206,6 +223,8 @@ class MCPClientHandler:
     ) -> Dict[str, Any]:
         """调用 MCP 服务器上的工具"""
         try:
+            # 确保服务器配置是最新的
+            await self.load_servers()
             if server_name not in self.mcp_servers:
                 return {
                     "success": False,
@@ -214,20 +233,20 @@ class MCPClientHandler:
 
             server_config = self.mcp_servers[server_name]
 
-            # 创建 MCP 服务器参数
-            server_params = StdioServerParameters(
-                command=server_config["command"],
-                args=server_config["args"]
-            )
-
-            # 连接到 MCP 服务器
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    # 初始化连接
-                    await session.initialize()
-
-                    # 调用工具
-                    result = await session.call_tool(tool_name, arguments=parameters)
+            # 根据 transport 连接服务器（SSE 或 stdio）
+            if server_config.get("transport") == "sse":
+                if sse_client is None:
+                    return {"success": False, "error": "后端未安装支持 HTTP(S) MCP 的 sse 客户端，请升级 mcp 包或改用 stdio 服务器"}
+                async with sse_client(server_config["url"]) as (read, write):  # type: ignore
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, arguments=parameters)
+            else:
+                server_params = StdioServerParameters(command=server_config["command"], args=server_config["args"])
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, arguments=parameters)
 
                     # 处理结果
                     if result.isError:
@@ -258,25 +277,21 @@ class MCPClientHandler:
                 "error": str(e)
             }
 
-    def get_available_tools(self) -> List[Dict[str, Any]]:
-        """获取所有可用的 MCP 工具"""
-        tools = []
-        for server_name, server_config in self.mcp_servers.items():
-            for tool_name in server_config.get("tools", []):
+    async def get_available_tools(self) -> List[Dict[str, Any]]:
+        """聚合所有活动 MCP 服务器的工具（动态）"""
+        # 确保加载最新服务器列表
+        await self.load_servers()
+        tools: List[Dict[str, Any]] = []
+        for server_name in self.mcp_servers.keys():
+            # 动态查询每个服务器可用工具
+            dynamic_tools = await self.get_server_tools_dynamic(server_name)
+            for t in dynamic_tools:
                 tools.append({
                     "type": "function",
                     "function": {
-                        "name": f"{server_name}_{tool_name}",
-                        "description": f"{server_config['description']} - {tool_name}",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "format": {
-                                    "type": "string",
-                                    "description": "时间格式（可选）"
-                                }
-                            }
-                        }
+                        "name": f"{server_name}_{t['name']}",
+                        "description": f"{t.get('description', '')}",
+                        "parameters": t.get('parameters', {}) or {}
                     }
                 })
         return tools
@@ -302,36 +317,33 @@ class MCPClientHandler:
 
             server_config = self.mcp_servers[server_name]
 
-            # 创建 MCP 服务器参数
-            server_params = StdioServerParameters(
-                command=server_config["command"],
-                args=server_config["args"]
-            )
+            # 根据传输方式连接到 MCP 服务器获取工具列表
+            if server_config.get("transport") == "sse" and sse_client is not None:
+                async with sse_client(server_config["url"]) as (read, write):  # type: ignore
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_response = await session.list_tools()
+            else:
+                server_params = StdioServerParameters(command=server_config["command"], args=server_config["args"])
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_response = await session.list_tools()
 
-            # 连接到 MCP 服务器获取工具列表
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    # 初始化连接
-                    await session.initialize()
+            tools = []
+            for tool in tools_response.tools:
+                tools.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                })
 
-                    # 列出可用工具
-                    tools_response = await session.list_tools()
-
-                    tools = []
-                    for tool in tools_response.tools:
-                        tools.append({
-                            "name": tool.name,
-                            "description": tool.description,
-                            "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
-                        })
-
-                    return tools
+            return tools
 
         except Exception as e:
             logger.error(f"获取 MCP 服务器 {server_name} 工具列表失败: {str(e)}")
-            # 回退到静态配置
-            return [{"name": tool, "description": f"{server_name} 工具"}
-                   for tool in self.mcp_servers[server_name].get("tools", [])]
+            # 失败时返回空
+            return []
 
 
 class AgentHandler:
@@ -365,7 +377,7 @@ class AgentHandler:
 
             if agent_tools and not stream:  # 工具调用暂不支持流式
                 # 获取可用工具
-                available_tools = self.mcp_handler.get_available_tools()
+                available_tools = await self.mcp_handler.get_available_tools()
 
                 # 过滤 Agent 配置的工具
                 filtered_tools = [

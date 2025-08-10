@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Typography, Modal, Form, Select, message, Input } from 'antd';
+import { Button, Typography, Modal, Form, Select, message, Input, ConfigProvider, theme } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import ChatMode from './components/ChatMode';
 import ChatArea from './components/ChatArea';
@@ -11,6 +11,7 @@ import { agentApi } from './services/api';
 import type { Agent } from './types';
 import 'antd/dist/reset.css';
 import './App.css';
+import { THEME } from './theme';
 
 const { Title } = Typography;
 
@@ -178,92 +179,101 @@ function App() {
   };
 
   return (
-    <div className="app-container" style={{
-      width: '100vw',
-      height: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      margin: 0,
-      padding: 0,
-      overflow: 'hidden'
-    }}>
-      {/* 顶部标题栏 */}
-      <div style={{
-        padding: '20px 24px',
-        background: 'rgba(255, 255, 255, 0.95)',
-        backdropFilter: 'blur(10px)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
-        boxShadow: '0 2px 20px rgba(0, 0, 0, 0.1)',
-        flexShrink: 0
-      }}>
-        <Title level={2} style={{
-          margin: 0,
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          fontWeight: 700
-        }}>
-          AI Agents 管理平台
-        </Title>
-      </div>
-
-      {/* 主内容区域 */}
-      <div style={{
-        flex: 1,
-        margin: '16px',
-        borderRadius: '16px',
-        background: '#ffffff',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
-        overflow: 'hidden',
+    <ConfigProvider
+      theme={{
+        algorithm: theme.defaultAlgorithm,
+        token: {
+          colorPrimary: THEME.colors.primary,
+          borderRadius: THEME.radius,
+          colorBgLayout: '#f7f8fa',
+        },
+      }}
+    >
+      <div className="app-container" style={{
+        width: '100vw',
+        height: '100vh',
         display: 'flex',
-        flexDirection: 'row',  // 改为水平布局
-        minHeight: 0
+        flexDirection: 'column',
+        background: 'linear-gradient(135deg, #eef2ff 0%, #fafafa 100%)',
+        margin: 0,
+        padding: 0,
+        overflow: 'hidden'
       }}>
-        {/* 左侧：Tab 导航 + 管理内容 */}
+        {/* 顶部标题栏 */}
         <div style={{
-          width: '400px',
-          borderRight: '1px solid #e8e9ea',
-          display: 'flex',
-          flexDirection: 'column',
-          background: '#f8f9fa',
+          padding: '16px 20px',
+          background: '#ffffff',
+          borderBottom: '1px solid #eee',
+          boxShadow: '0 1px 6px rgba(0, 0, 0, 0.06)',
           flexShrink: 0
         }}>
-          {/* Tab 导航 */}
-          <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
+          <Title level={3} style={{
+            margin: 0,
+            color: '#2b2f36',
+            fontWeight: 700
+          }}>
+            AI Agents 管理平台
+          </Title>
+        </div>
 
-          {/* 管理内容区域 */}
+        {/* 主内容区域 */}
+        <div style={{
+          flex: 1,
+          margin: '12px',
+          borderRadius: '12px',
+          background: '#ffffff',
+          boxShadow: '0 6px 20px rgba(0, 0, 0, 0.06)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'row',
+          minHeight: 0
+        }}>
+          {/* 左侧：Tab 导航 + 管理内容 */}
+          <div style={{
+            width: `${THEME.sidebarWidth}px`,
+            borderRight: '1px solid #eee',
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#fafafa',
+            flexShrink: 0
+          }}>
+            {/* 管理内容区域 */}
+            <div style={{
+              flex: 1,
+              overflow: 'hidden',
+              minHeight: 0
+            }}>
+              {activeTab === 'manage' ? (
+                <AgentManager agents={agents} onAgentsChange={setAgents} />
+              ) : activeTab === 'mcp' ? (
+                <MCPServerManager />
+              ) : (
+                // 聊天模式下显示 Agent 选择和对话历史
+                <ChatMode agents={agents} onCreateSession={handleCreateSession} />
+              )}
+            </div>
+            {/* 左侧底部 Tab 导航 */}
+            <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
+          </div>
+
+          {/* 中间间隙 */}
+          <div style={{ width: 12, flexShrink: 0, background: 'linear-gradient(135deg, #eef2ff 0%, #fafafa 100%)' }} />
+
+          {/* 右侧：聊天区域 */}
           <div style={{
             flex: 1,
-            overflow: 'hidden',
-            minHeight: 0
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#ffffff',
+            minHeight: 0,
+            overflow: 'hidden'
           }}>
-            {activeTab === 'manage' ? (
-              <AgentManager agents={agents} onAgentsChange={setAgents} />
-            ) : activeTab === 'mcp' ? (
-              <MCPServerManager />
-            ) : (
-              // 聊天模式下显示 Agent 选择和对话历史
-              <ChatMode agents={agents} onCreateSession={handleCreateSession} />
-            )}
+            {renderChatArea()}
           </div>
         </div>
 
-        {/* 右侧：聊天区域 */}
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          background: '#ffffff',
-          minHeight: 0,
-          overflow: 'hidden'
-        }}>
-          {renderChatArea()}
-        </div>
-      </div>
-
-      {/* 新建对话模态框 */}
-      <Modal
+        {/* 新建对话模态框 */}
+        <Modal
         title={
           <span style={{ fontSize: '18px', fontWeight: 600 }}>
             新建对话
@@ -331,7 +341,8 @@ function App() {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+      </div>
+    </ConfigProvider>
   );
 }
 

@@ -172,8 +172,11 @@ async def create_mcp_server(request: Request):
         if not data.get("name"):
             return error_response("服务器名称不能为空", 400)
 
-        if not data.get("api_url"):
+        api_url = (data.get("api_url") or "").strip()
+        if not api_url:
             return error_response("API 地址不能为空", 400)
+        if not (api_url.startswith("http://") or api_url.startswith("https://")):
+            return error_response("仅支持以 http:// 或 https:// 开头的 MCP HTTP 接口", 400)
 
         # 检查名称是否已存在
         existing_server = await MCPServer.filter(name=data["name"]).first()
@@ -183,7 +186,7 @@ async def create_mcp_server(request: Request):
         server = await MCPServer.create(
             name=data["name"],
             description=data.get("description", ""),
-            api_url=data["api_url"],
+            api_url=api_url,
             is_active=data.get("is_active", True)
         )
 
@@ -204,6 +207,13 @@ async def update_mcp_server(request: Request, server_id: int):
             existing_server = await MCPServer.filter(name=data["name"]).first()
             if existing_server:
                 return error_response("服务器名称已存在", 400)
+
+        # 限制 api_url 只能是 http(s)
+        if "api_url" in data:
+            new_url = (data["api_url"] or "").strip()
+            if not (new_url.startswith("http://") or new_url.startswith("https://")):
+                return error_response("仅支持以 http:// 或 https:// 开头的 MCP HTTP 接口", 400)
+            data["api_url"] = new_url
 
         # 更新字段
         for field in ["name", "description", "api_url", "is_active"]:

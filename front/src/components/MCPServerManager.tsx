@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Button, List, Avatar, Popconfirm, message, Modal, Form, Input, Switch } from 'antd';
 import { PlusOutlined, CloudServerOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import { mcpApi } from '../services/api';
+import { THEME } from '../theme';
 import type { MCPServer } from '../types';
 
 interface MCPServerManagerProps {
@@ -98,29 +99,17 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          size="large"
+          size="middle"
           block
           onClick={handleCreate}
           style={{
-            borderRadius: '16px',
-            height: '56px',
-            fontSize: '16px',
+            borderRadius: '10px',
+            height: 40,
+            fontSize: 14,
             fontWeight: 600,
-            border: 'none',
-            background: 'linear-gradient(135deg, #1890ff 0%, #096dd9 100%)',
-            boxShadow: '0 6px 20px rgba(24, 144, 255, 0.4)',
-            transition: 'all 0.3s ease'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'translateY(-2px)';
-            e.currentTarget.style.boxShadow = '0 8px 25px rgba(24, 144, 255, 0.5)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 6px 20px rgba(24, 144, 255, 0.4)';
           }}
         >
-          创建新的 MCP 服务器
+          新建 MCP 服务器
         </Button>
       </div>
 
@@ -136,48 +125,22 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
             renderItem={(server) => (
               <List.Item
                 style={{
-                  background: '#ffffff',
-                  borderRadius: '12px',
-                  marginBottom: '12px',
-                  padding: '16px',
-                  border: '1px solid #f0f0f0',
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.06)',
+                  background: '#fff',
+                  borderRadius: 10,
+                  marginBottom: 12,
+                  padding: 16,
+                  border: '1px solid #eee'
                 }}
-                actions={[
-                  <Button
-                    key="edit"
-                    type="text"
-                    icon={<EditOutlined />}
-                    onClick={() => handleEdit(server)}
-                    style={{ color: '#1890ff' }}
-                  >
-                    编辑
-                  </Button>,
-                  <Popconfirm
-                    key="delete"
-                    title="确定要删除这个 MCP 服务器吗？"
-                    onConfirm={() => handleDelete(server.id)}
-                    okText="确定"
-                    cancelText="取消"
-                  >
-                    <Button
-                      type="text"
-                      icon={<DeleteOutlined />}
-                      danger
-                    >
-                      删除
-                    </Button>
-                  </Popconfirm>
-                ]}
               >
                 <List.Item.Meta
                   avatar={
                     <Avatar
+                      size={40}
                       style={{
                         backgroundColor: server.is_active ? '#52c41a' : '#d9d9d9',
                         color: '#ffffff'
                       }}
-                      icon={<CloudServerOutlined />}
+                      icon={<CloudServerOutlined style={{ fontSize: 18 }} />}
                     />
                   }
                   title={
@@ -199,6 +162,27 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
                       </div>
                       <div style={{ fontSize: '12px', color: '#999' }}>
                         API 地址: {server.api_url}
+                      </div>
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={(e) => { e.stopPropagation(); handleEdit(server); }}
+                          style={{ color: '#1890ff', padding: '0 6px' }}
+                        >
+                          编辑
+                        </Button>
+                        <Popconfirm
+                          title="确定要删除这个 MCP 服务器吗？"
+                          onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(server.id); }}
+                          okText="确定"
+                          cancelText="取消"
+                        >
+                          <Button type="text" size="small" icon={<DeleteOutlined />} danger style={{ padding: '0 6px' }} onClick={(e) => e.stopPropagation()}>
+                            删除
+                          </Button>
+                        </Popconfirm>
                       </div>
                     </div>
                   }
@@ -259,10 +243,14 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
           <Form.Item
             name="api_url"
             label={<span style={{ fontWeight: 600 }}>API 地址</span>}
-            rules={[{ required: true, message: '请输入 API 地址' }]}
+            rules={[
+              { required: true, message: '请输入 API 地址' },
+              { pattern: /^https?:\/\//i, message: '仅支持以 http:// 或 https:// 开头的 MCP HTTP 接口' }
+            ]}
+            tooltip="请输入 MCP HTTP(S) 接口，例如：http://host:port/mcp"
           >
             <Input
-              placeholder="例如：http://localhost:3000/api 或 stdio://server.py"
+              placeholder="例如：http://localhost:9090/mcp"
               style={{ borderRadius: '8px', padding: '10px 12px' }}
             />
           </Form.Item>

@@ -81,14 +81,40 @@ def time_prompt(action: str = "current") -> str:
         return "请使用时间相关的工具。"
 
 def main():
-    """主函数 - 启动 MCP 服务器"""
-    # 从命令行参数获取传输方式
-    if len(sys.argv) > 1 and sys.argv[1] == "stdio":
-        # 使用 stdio 传输
-        mcp.run(transport="stdio")
-    else:
-        # 默认使用 stdio
-        mcp.run(transport="stdio")
+    """主函数 - 启动 MCP 服务器
+    用法:
+      python time_server.py sse [port]    # 启动 HTTP(S)+SSE 服务器，默认端口 9090
+      python time_server.py stdio         # 启动 stdio 服务器（仅用于本地调试）
+    """
+    transport = "stdio"
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        if arg in {"sse", "http", "http-sse"}:
+            transport = "sse"
+        elif arg == "stdio":
+            transport = "stdio"
 
+    if transport == "sse":
+        # 优先尝试在 0.0.0.0:9090 端口启动，避免与后端 8000 冲突
+        port = 9090
+        if len(sys.argv) > 2:
+            try:
+                port = int(sys.argv[2])
+            except ValueError:
+                pass
+        try:
+            print(f"[MCP] Starting SSE server on port {port}...")
+            mcp.run(transport="sse", port=port)
+        except TypeError:
+            # 老版本不支持 port 关键字，退回默认端口
+            print("[MCP] Falling back to default SSE port (likely 8000)...")
+            mcp.run(transport="sse")
+        except Exception as e:
+            print(f"无法启动 SSE/HTTP MCP 服务器: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # 本地调试：stdio
+        print("[MCP] Starting stdio server...")
+        pass
 if __name__ == "__main__":
     main()

@@ -1,14 +1,63 @@
-import React, { useState } from 'react';
-import { Input, Button, Avatar, Typography, Empty } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Input, Button, Avatar, Typography, Empty, message as antdMessage } from 'antd';
 import { SendOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons';
 import { useAppStore } from '../store';
+import { chatApi } from '../services/api';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 const ChatArea: React.FC = () => {
-  const { currentAgent, currentSession } = useAppStore();
+  const { currentAgent, currentSession, addMessage } = useAppStore();
   const [inputMessage, setInputMessage] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!currentAgent || !currentSession) return;
+    const content = inputMessage.trim();
+    if (!content) return;
+
+    // 追加用户消息
+    addMessage(currentSession.id, {
+      id: Date.now().toString(),
+      role: 'user',
+      content,
+      created_at: new Date().toISOString(),
+    });
+
+    setInputMessage('');
+    setSending(true);
+
+    try {
+      // 组装历史消息（不包括系统提示词，后端会加）
+      const payload = {
+        agent_id: currentAgent.id,
+        messages: useAppStore.getState().currentSession?.messages.map(m => ({ role: m.role, content: m.content })) || []
+      };
+
+      const resp = await chatApi.sendMessage(payload);
+      const replyContent = typeof resp === 'string' ? resp : (resp.content || JSON.stringify(resp));
+
+      addMessage(currentSession.id, {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: replyContent,
+        created_at: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      antdMessage.error(err?.message || '发送失败');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // 自动滚动到底部
+  useEffect(() => {
+    const el = document.getElementById('chat-scroll');
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [currentSession?.messages.length]);
 
   return (
     <div style={{
@@ -25,7 +74,7 @@ const ChatArea: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         padding: '0 24px',
-        borderBottom: '1px solid #f0f0f0',
+        borderBottom: '1px solid #eee',
         boxShadow: '0 1px 4px rgba(0,0,0,0.1)'
       }}>
         <Avatar icon={<RobotOutlined />} size="large" style={{ marginRight: '12px', backgroundColor: '#1890ff' }} />
@@ -40,7 +89,7 @@ const ChatArea: React.FC = () => {
       </div>
 
       {/* 消息区域 */}
-      <div style={{
+      <div id="chat-scroll" style={{
         flex: 1,
         padding: '20px 24px',
         background: '#f8f9fa',
@@ -70,19 +119,30 @@ const ChatArea: React.FC = () => {
                     flexShrink: 0
                   }}
                 />
-                <div style={{
-                  backgroundColor: message.role === 'user' ? '#1890ff' : '#fff',
-                  color: message.role === 'user' ? '#fff' : '#262626',
-                  padding: '10px 14px',
-                  borderRadius: '18px',
-                  borderBottomRightRadius: message.role === 'user' ? '4px' : '18px',
-                  borderBottomLeftRadius: message.role === 'user' ? '18px' : '4px',
-                  fontSize: '14px',
-                  lineHeight: '1.4',
-                  border: message.role === 'user' ? 'none' : '1px solid #e8e8e8',
-                  wordBreak: 'break-word'
-                }}>
-                  {message.content}
+                <div>
+                  <div style={{
+                    backgroundColor: message.role === 'user' ? '#1677ff' : '#fff',
+                    color: message.role === 'user' ? '#fff' : '#262626',
+                    padding: '10px 14px',
+                    borderRadius: '18px',
+                    borderBottomRightRadius: message.role === 'user' ? '4px' : '18px',
+                    borderBottomLeftRadius: message.role === 'user' ? '18px' : '4px',
+                    fontSize: '14px',
+                    lineHeight: '1.6',
+                    border: message.role === 'user' ? 'none' : '1px solid #f0f0f0',
+                    wordBreak: 'break-word',
+                    boxShadow: message.role === 'user' ? 'none' : '0 1px 3px rgba(0,0,0,0.06)'
+                  }}>
+                    {message.content}
+                  </div>
+                  <div style={{
+                    fontSize: '12px',
+                    color: '#999',
+                    marginTop: '4px',
+                    textAlign: message.role === 'user' ? 'right' : 'left'
+                  }}>
+                    {new Date(message.created_at).toLocaleTimeString()}
+                  </div>
                 </div>
               </div>
             </div>
@@ -163,7 +223,7 @@ const ChatArea: React.FC = () => {
               onPressEnter={(e) => {
                 if (!e.shiftKey) {
                   e.preventDefault();
-                  // 这里后续添加发送逻辑
+                  handleSend();
                 }
               }}
             />
@@ -172,7 +232,9 @@ const ChatArea: React.FC = () => {
             type="primary"
             shape="circle"
             icon={<SendOutlined />}
-            disabled={!inputMessage.trim()}
+            disabled={!inputMessage.trim() || sending}
+            loading={sending}
+            onClick={handleSend}
             size="large"
             style={{
               width: '40px',

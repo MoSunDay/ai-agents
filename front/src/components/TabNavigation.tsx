@@ -1,5 +1,6 @@
 import { Tabs } from 'antd';
 import { MessageOutlined, SettingOutlined, CloudServerOutlined } from '@ant-design/icons';
+import { THEME } from '../theme';
 
 interface TabNavigationProps {
   activeTab: string;
@@ -9,10 +10,9 @@ interface TabNavigationProps {
 const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, onTabChange }) => {
   return (
     <div style={{
-      padding: '16px',
-      borderBottom: '1px solid #e8e9ea',
-      background: 'linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%)',
-      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.06)',
+      padding: '8px 12px',
+      borderTop: `1px solid ${THEME.colors.border}`,
+      background: THEME.colors.bgSidebar,
       flexShrink: 0
     }}>
       <Tabs
