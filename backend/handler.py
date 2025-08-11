@@ -9,11 +9,16 @@ from utils import logger, format_openai_messages
 # MCP imports
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-# 尝试导入 SSE 客户端以支持 HTTP(S) 协议的 MCP 服务器
+# 优先导入 Streamable HTTP 客户端（HTTP 传输推荐）
+try:
+    from mcp.client.streamable_http import streamablehttp_client as http_stream_client  # type: ignore
+except Exception:
+    http_stream_client = None
+# 兼容：SSE 客户端（不推荐，保底）
 try:
     from mcp.client.sse import sse_client  # type: ignore
-except Exception:  # pragma: no cover
-    sse_client = None  # 动态检测
+except Exception:
+    sse_client = None
 
 import mcp.types as mcp_types
 
@@ -205,7 +210,7 @@ class MCPClientHandler:
                 # 仅支持 http(s) 协议
                 if url.startswith("http://") or url.startswith("https://"):
                     mapping[s.name] = {
-                        "transport": "sse",
+                        "transport": "http" if http_stream_client is not None else "sse",
                         "url": url,
                         "description": s.description,
                     }
@@ -234,7 +239,14 @@ class MCPClientHandler:
             server_config = self.mcp_servers[server_name]
 
             # 根据 transport 连接服务器（SSE 或 stdio）
-            if server_config.get("transport") == "sse":
+            if server_config.get("transport") == "http":
+                if http_stream_client is None:
+                    return {"success": False, "error": "后端未安装支持 HTTP MCP 的 http 客户端，请升级 mcp 包"}
+                async with http_stream_client(server_config["url"]) as (read, write, _get_sid):  # type: ignore
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, arguments=parameters)
+            elif server_config.get("transport") == "sse":
                 if sse_client is None:
                     return {"success": False, "error": "后端未安装支持 HTTP(S) MCP 的 sse 客户端，请升级 mcp 包或改用 stdio 服务器"}
                 async with sse_client(server_config["url"]) as (read, write):  # type: ignore
@@ -312,13 +324,20 @@ class MCPClientHandler:
     async def get_server_tools_dynamic(self, server_name: str) -> List[Dict[str, Any]]:
         """动态获取 MCP 服务器的工具列表"""
         try:
+            # 确保使用最新的服务器映射
+            await self.load_servers()
             if server_name not in self.mcp_servers:
                 return []
 
             server_config = self.mcp_servers[server_name]
 
             # 根据传输方式连接到 MCP 服务器获取工具列表
-            if server_config.get("transport") == "sse" and sse_client is not None:
+            if server_config.get("transport") == "http" and http_stream_client is not None:
+                async with http_stream_client(server_config["url"]) as (read, write, _get_sid):  # type: ignore
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_response = await session.list_tools()
+            elif server_config.get("transport") == "sse" and sse_client is not None:
                 async with sse_client(server_config["url"]) as (read, write):  # type: ignore
                     async with ClientSession(read, write) as session:
                         await session.initialize()
@@ -421,6 +440,87 @@ class AgentHandler:
                 "success": False,
                 "error": str(e)
             }
+
+    async def process_message_stream(
+        self,
+        agent_id: int,
+        messages: List[Dict[str, str]],
+    ) -> AsyncGenerator[str, None]:
+        """处理消息并以流式方式返回回复，先进行 MCP 工具调用（如需要），再流式输出最终回复"""
+        try:
+            agent = await Agent.get(id=agent_id)
+
+            # 格式化消息
+            formatted_messages = format_openai_messages(agent.prompt, messages)
+
+            # OpenAI 配置
+            openai_config = agent.openai_config or {}
+            model = openai_config.get("model", "qwen3:32b")
+            temperature = openai_config.get("temperature", 0.7)
+            max_tokens = openai_config.get("max_tokens")
+
+            agent_tools = agent.mcp_tools or []
+
+            if agent_tools:
+                available_tools = await self.mcp_handler.get_available_tools()
+                filtered_tools = [
+                    tool for tool in available_tools
+                    if any(mcp_tool in tool["function"]["name"] for mcp_tool in agent_tools)
+                ]
+                if filtered_tools:
+                    # 第一次调用，获取工具调用
+                    first = await self.openai_handler.chat_completion_with_tools(
+                        messages=formatted_messages,
+                        tools=filtered_tools,
+                        model=model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if first.get("tool_calls"):
+                        # 将工具调用与结果加入消息
+                        messages_with_tools = list(formatted_messages)
+                        messages_with_tools.append({
+                            "role": "assistant",
+                            "content": first.get("content") or "",
+                            "tool_calls": first["tool_calls"],
+                        })
+                        for tool_call in first["tool_calls"]:
+                            function_name = tool_call["function"]["name"]
+                            function_args = json.loads(tool_call["function"]["arguments"])
+                            if "_" in function_name:
+                                server_name, tool_name = function_name.split("_", 1)
+                            else:
+                                server_name = "time_server"
+                                tool_name = function_name
+                            tool_result = await self.mcp_handler.call_mcp_tool(
+                                server_name, tool_name, function_args
+                            )
+                            messages_with_tools.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": json.dumps(tool_result),
+                            })
+                        # 最终流式输出
+                        async for chunk in self.openai_handler.chat_completion_stream(
+                            messages=messages_with_tools,
+                            model=model,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                        ):
+                            yield chunk
+                        return
+
+            # 无工具或无工具调用，直接流式输出
+            async for chunk in self.openai_handler.chat_completion_stream(
+                messages=formatted_messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error(f"流式处理消息失败: {str(e)}")
+            yield f"流式处理失败: {str(e)}"
 
     async def _process_with_tools(
         self,

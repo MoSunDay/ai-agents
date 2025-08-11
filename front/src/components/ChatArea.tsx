@@ -3,6 +3,7 @@ import { Input, Button, Avatar, Typography, Empty, message as antdMessage } from
 import { SendOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons';
 import { useAppStore } from '../store';
 import { chatApi } from '../services/api';
+import { API_BASE_URL } from '../services/api';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -30,18 +31,58 @@ const ChatArea: React.FC = () => {
 
     try {
       // 组装历史消息（不包括系统提示词，后端会加）
-      const payload = {
-        agent_id: currentAgent.id,
-        messages: useAppStore.getState().currentSession?.messages.map(m => ({ role: m.role, content: m.content })) || []
-      };
+      const history = useAppStore.getState().currentSession?.messages.map(m => ({ role: m.role, content: m.content })) || [];
+      const payload = { agent_id: currentAgent.id, messages: history };
 
-      const resp = await chatApi.sendMessage(payload);
-      const replyContent = typeof resp === 'string' ? resp : (resp.content || JSON.stringify(resp));
+      // 优先尝试流式
+      const resp = await fetch(`${API_BASE_URL}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok || !resp.body) {
+        // 回退到非流式
+        const noStream = await chatApi.sendMessage(payload);
+        const replyText = typeof noStream === 'string' ? noStream : (noStream.content || JSON.stringify(noStream));
+        addMessage(currentSession.id, {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: replyText,
+          created_at: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // 读取 SSE data: 流
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let acc = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const raw = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 2);
+          if (!raw.startsWith('data:')) continue;
+          const data = raw.slice(5).trim();
+          if (data === '[DONE]') {
+            break;
+          }
+          // 累积文本片段（后端当前返回的是文本增量）
+          acc += data;
+        }
+      }
 
       addMessage(currentSession.id, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: replyContent,
+        content: acc || '[空响应]',
         created_at: new Date().toISOString(),
       });
     } catch (err: any) {

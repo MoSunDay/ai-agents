@@ -131,7 +131,8 @@ async def send_message(request: Request):
 
 @api.route("/chat/stream", methods=["POST"])
 async def send_message_stream(request: Request):
-    """发送消息并流式获取回复 - 暂时返回普通响应"""
+    """发送消息并流式获取回复 - 使用 SSE 风格 data: 行输出"""
+    from sanic.response import stream as sanic_stream
     try:
         data = parse_request_json(request)
         agent_id = data.get("agent_id")
@@ -139,17 +140,19 @@ async def send_message_stream(request: Request):
 
         if not agent_id:
             return error_response("缺少 agent_id 参数", 400)
-
         if not messages:
             return error_response("缺少 messages 参数", 400)
 
-        # 暂时使用普通响应，后续可以实现真正的流式响应
-        response = await agent_handler.process_message(agent_id, messages, stream=False)
+        async def streaming_fn(resp):
+            try:
+                async for chunk in agent_handler.process_message_stream(agent_id, messages):
+                    # 将文本增量以 SSE data: 行写出
+                    await resp.write(f"data: {chunk}\n\n")
+                await resp.write("data: [DONE]\n\n")
+            except Exception as e:
+                await resp.write(f"data: [ERROR] {str(e)}\n\n")
 
-        if isinstance(response, dict) and not response.get("success", True):
-            return error_response(response.get("error", "处理消息失败"), 500)
-
-        return success_response(response)
+        return await sanic_stream(streaming_fn, content_type="text/event-stream; charset=utf-8")
     except Exception as e:
         return error_response(f"流式发送消息失败: {str(e)}", 500)
 

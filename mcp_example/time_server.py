@@ -9,7 +9,7 @@ import sys
 from datetime import datetime
 from typing import Any, Dict
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # 创建 MCP 服务器
 mcp = FastMCP("TimeServer")
@@ -89,13 +89,15 @@ def main():
     transport = "stdio"
     if len(sys.argv) > 1:
         arg = sys.argv[1].lower()
-        if arg in {"sse", "http", "http-sse"}:
+        if arg in {"http", "streamable-http", "http-sse"}:
+            transport = "http"
+        elif arg == "sse":
             transport = "sse"
         elif arg == "stdio":
             transport = "stdio"
 
-    if transport == "sse":
-        # 优先尝试在 0.0.0.0:9090 端口启动，避免与后端 8000 冲突
+    if transport in {"http", "sse"}:
+        # 尝试在 0.0.0.0:9090 端口启动，避免与后端 8001 冲突
         port = 9090
         if len(sys.argv) > 2:
             try:
@@ -103,14 +105,18 @@ def main():
             except ValueError:
                 pass
         try:
-            print(f"[MCP] Starting SSE server on port {port}...")
-            mcp.run(transport="sse", port=port)
+            if transport == "http":
+                print(f"[MCP] Starting HTTP (streamable) server on port {port}...")
+                mcp.run(transport="http", host="0.0.0.0", port=port, path="/mcp")
+            else:
+                print(f"[MCP] Starting SSE server on port {port}...")
+                mcp.run(transport="sse", host="0.0.0.0", port=port)
         except TypeError:
-            # 老版本不支持 port 关键字，退回默认端口
-            print("[MCP] Falling back to default SSE port (likely 8000)...")
-            mcp.run(transport="sse")
+            # 老版本不支持关键字参数，回退到默认设置
+            print("[MCP] Falling back to defaults...")
+            mcp.run(transport="http" if transport == "http" else "sse")
         except Exception as e:
-            print(f"无法启动 SSE/HTTP MCP 服务器: {e}", file=sys.stderr)
+            print(f"无法启动 MCP 服务器: {e}", file=sys.stderr)
             sys.exit(1)
     else:
         # 本地调试：stdio

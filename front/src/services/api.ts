@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { Agent } from '../types';
 
 // API 基础配置
-const API_BASE_URL = 'http://localhost:8001/api';
+export const API_BASE_URL = 'http://localhost:8001/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
