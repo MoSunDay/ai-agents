@@ -11,21 +11,23 @@ const api = axios.create({
   },
 });
 
-// 响应拦截器处理新的响应格式
+// 响应拦截器处理新的响应格式（保留服务端错误细节）
 api.interceptors.response.use(
   (response) => {
-    // 如果响应有 success 字段，返回 data 部分
     if (response.data && typeof response.data.success !== 'undefined') {
       if (response.data.success) {
         return { ...response, data: response.data.data };
       } else {
-        throw new Error(response.data.message || '请求失败');
+        const err: any = new Error(response.data.message || '请求失败');
+        err.detail = response.data; // 包含 { success, message, data }
+        return Promise.reject(err);
       }
     }
     return response;
   },
   (error) => {
-    throw error;
+    // 透传带有 detail 的错误
+    return Promise.reject(error);
   }
 );
 

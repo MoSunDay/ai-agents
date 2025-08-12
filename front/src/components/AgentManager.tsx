@@ -4,6 +4,7 @@ import { THEME } from '../theme';
 import { PlusOutlined, RobotOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import { agentApi, mcpApi } from '../services/api';
 import type { Agent, MCPServer } from '../types';
+import { useAppStore } from '../store';
 
 interface AgentManagerProps {
   agents: Agent[];
@@ -13,10 +14,12 @@ interface AgentManagerProps {
 const AgentManager: React.FC<AgentManagerProps> = ({ agents, onAgentsChange }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
   const [serverToolsMap, setServerToolsMap] = useState<Record<string, { name: string; description?: string }[]>>({});
   const [selectedServerName, setSelectedServerName] = useState<string | undefined>(undefined);
+  const { currentAgent, setCurrentAgent } = useAppStore();
 
   useEffect(() => {
     loadMcpServers();
@@ -60,22 +63,51 @@ const AgentManager: React.FC<AgentManagerProps> = ({ agents, onAgentsChange }) =
 
   const handleSave = async (values: any) => {
     try {
+      setSaving(true);
+
+      // 强制将 mcp_tools 规整为数组
+      let mcp_tools: any = values.mcp_tools;
+      if (!Array.isArray(mcp_tools)) {
+        if (typeof mcp_tools === 'string' && mcp_tools.trim().length > 0) {
+          mcp_tools = [mcp_tools.trim()];
+        } else {
+          mcp_tools = [];
+        }
+      }
+
+      const basePayload = {
+        name: values.name,
+        description: values.description,
+        prompt: values.prompt,
+        mcp_tools,
+        openai_config: values.openai_config || { model: 'qwen3:32b' }
+      };
+
       if (editingAgent) {
-        const updatedAgent = await agentApi.update(editingAgent.id, values);
-        const updatedAgents = agents.map(a => a.id === editingAgent.id ? updatedAgent : a);
-        onAgentsChange(updatedAgents);
+        await agentApi.update(editingAgent.id, basePayload);
         message.success('Agent 更新成功');
       } else {
-        const newAgent = await agentApi.create(values);
-        onAgentsChange([...agents, newAgent]);
+        await agentApi.create(basePayload as any);
         message.success('Agent 创建成功');
       }
+
+      // 刷新列表，保持一致性
+      const latest = await agentApi.getAll();
+      onAgentsChange(latest);
+
       setModalOpen(false);
       form.resetFields();
       setEditingAgent(null);
-    } catch (error) {
-      message.error('保存 Agent 失败');
+    } catch (error: any) {
+      const detail = error?.detail;
+      if (detail?.data?.errors?.length) {
+        message.error(`${detail.message}：${detail.data.errors.join('；')}`);
+      } else {
+        message.error(error?.message || '保存 Agent 失败');
+      }
       console.error('Error saving agent:', error);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -365,6 +397,7 @@ const AgentManager: React.FC<AgentManagerProps> = ({ agents, onAgentsChange }) =
             <Button
               type="primary"
               htmlType="submit"
+              loading={saving}
               style={{
                 borderRadius: '8px',
                 padding: '6px 20px',
@@ -374,7 +407,7 @@ const AgentManager: React.FC<AgentManagerProps> = ({ agents, onAgentsChange }) =
                 border: 'none'
               }}
             >
-              {editingAgent ? '更新' : '创建'}
+              {editingAgent ? (saving ? '更新中…' : '更新') : (saving ? '创建中…' : '创建')}
             </Button>
           </Form.Item>
         </Form>

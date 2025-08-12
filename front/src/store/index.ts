@@ -21,6 +21,8 @@ interface AppState {
   setSessions: (sessions: ChatSession[]) => void;
   setCurrentSession: (session: ChatSession | null) => void;
   addMessage: (sessionId: string, message: ChatMessage) => void;
+  updateMessage: (sessionId: string, messageId: string, patch: Partial<ChatMessage>) => void;
+  appendToMessage: (sessionId: string, messageId: string, text: string) => void;
   createSession: (agent: Agent, title?: string) => ChatSession;
   updateSessionTitle: (sessionId: string, newTitle: string) => void;
   deleteSession: (sessionId: string) => void;
@@ -68,6 +70,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     return {
       sessions: updatedSessions,
       currentSession: updatedCurrentSession
+    };
+  }),
+
+  updateMessage: (sessionId, messageId, patch) => set((state) => {
+    const updatedSessions = state.sessions.map(session =>
+      session.id === sessionId
+        ? {
+            ...session,
+            messages: session.messages.map(m => m.id === messageId ? { ...m, ...patch } : m),
+            updated_at: new Date().toISOString()
+          }
+        : session
+    );
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(updatedSessions));
+    return {
+      sessions: updatedSessions,
+      currentSession: state.currentSession?.id === sessionId
+        ? updatedSessions.find(s => s.id === sessionId) || state.currentSession
+        : state.currentSession
+    };
+  }),
+
+  appendToMessage: (sessionId, messageId, text) => set((state) => {
+    const updatedSessions = state.sessions.map(session =>
+      session.id === sessionId
+        ? {
+            ...session,
+            messages: session.messages.map(m => m.id === messageId ? { ...m, content: (m.content || '') + text } : m),
+            updated_at: new Date().toISOString()
+          }
+        : session
+    );
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(updatedSessions));
+    return {
+      sessions: updatedSessions,
+      currentSession: state.currentSession?.id === sessionId
+        ? updatedSessions.find(s => s.id === sessionId) || state.currentSession
+        : state.currentSession
     };
   }),
 

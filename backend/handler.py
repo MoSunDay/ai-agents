@@ -82,12 +82,8 @@ class OpenAIHandler:
                     }
         except Exception as e:
             logger.error(f"OpenAI API 调用失败: {str(e)}")
-            # 返回模拟响应用于测试
-            return {
-                "content": f"这是一个模拟的AI回复。原始消息: {messages[-1]['content'] if messages else ''}",
-                "role": "assistant",
-                "usage": {"total_tokens": 50}
-            }
+            # 去掉兜底的模拟返回，直接抛出错误，便于上层捕获并返回真实错误
+            raise
 
     async def chat_completion_stream(
         self,
@@ -111,8 +107,30 @@ class OpenAIHandler:
             response = await self.client.chat.completions.create(**kwargs)
 
             async for chunk in response:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                text = ""
+                try:
+                    # OpenAI SDK 常见结构：chunk.choices[0].delta.content
+                    if hasattr(chunk, "choices") and chunk.choices:
+                        choice0 = chunk.choices[0]
+                        delta = getattr(choice0, "delta", None) or getattr(choice0, "message", None)
+                        if delta is not None:
+                            # pydantic 对象或 dict 都兼容
+                            if hasattr(delta, "content"):
+                                text = getattr(delta, "content") or ""
+                            elif isinstance(delta, dict):
+                                text = delta.get("content") or ""
+                    # 兜底：有些实现直接以 dict 返回
+                    if not text and isinstance(chunk, dict):
+                        choices = chunk.get("choices") or []
+                        if choices:
+                            delta = choices[0].get("delta") or choices[0].get("message") or {}
+                            text = delta.get("content") or ""
+                except Exception:
+                    # 忽略解析错误，继续下一片段
+                    text = ""
+
+                if text:
+                    yield text
 
         except Exception as e:
             logger.error(f"OpenAI API 流式调用失败: {str(e)}")

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Typography, Modal, Form, Select, message, Input, ConfigProvider, theme } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Typography, Modal, message, ConfigProvider, theme } from 'antd';
 import ChatMode from './components/ChatMode';
 import ChatArea from './components/ChatArea';
 import AgentManager from './components/AgentManager';
@@ -8,7 +7,6 @@ import MCPServerManager from './components/MCPServerManager';
 import TabNavigation from './components/TabNavigation';
 import { useAppStore } from './store';
 import { agentApi } from './services/api';
-import type { Agent } from './types';
 import 'antd/dist/reset.css';
 import './App.css';
 import { THEME } from './theme';
@@ -26,9 +24,6 @@ function App() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState('chat');
-  const [newSessionModalOpen, setNewSessionModalOpen] = useState(false);
-  const [sessionForm] = Form.useForm();
-
   // 加载数据
   useEffect(() => {
     loadAgents();
@@ -47,34 +42,19 @@ function App() {
     }
   };
 
-  // 创建新对话
+  // 创建新对话：直接使用当前已选择的 Agent，不再二次选择
   const handleCreateSession = () => {
-    if (agents.length === 0) {
-      message.error('请先创建一个 Agent');
-      setActiveTab('manage');
+    if (!currentAgent) {
+      message.error('请先在上方选择一个 Agent');
       return;
     }
-    setNewSessionModalOpen(true);
-  };
-
-  const handleCreateSessionSubmit = (values: any) => {
-    try {
-      const agent = agents.find(a => a.id === values.agent_id);
-      if (!agent) {
-        message.error('请选择一个有效的 Agent');
-        return;
-      }
-
-      const newSession = createSession(agent, values.title || '新建对话');
-      setCurrentAgent(agent);
-
-      setNewSessionModalOpen(false);
-      sessionForm.resetFields();
+    const newSession = createSession(currentAgent, '新建对话');
+    if (newSession) {
       message.success('新对话创建成功');
-    } catch (error) {
-      console.error('Error creating session:', error);
     }
   };
+
+
 
   const renderChatArea = () => {
     const { currentSession, currentAgent } = useAppStore();
@@ -272,75 +252,9 @@ function App() {
           </div>
         </div>
 
-        {/* 新建对话模态框 */}
-        <Modal
-        title={
-          <span style={{ fontSize: '18px', fontWeight: 600 }}>
-            新建对话
-          </span>
-        }
-        open={newSessionModalOpen}
-        onCancel={() => setNewSessionModalOpen(false)}
-        footer={null}
-        width={500}
-        style={{ borderRadius: '16px' }}
-      >
-        <Form form={sessionForm} onFinish={handleCreateSessionSubmit} layout="vertical">
-          <Form.Item
-            name="agent_id"
-            label={<span style={{ fontWeight: 600 }}>选择 Agent</span>}
-            rules={[{ required: true, message: '请选择一个 Agent' }]}
-          >
-            <Select
-              placeholder="请选择要对话的 Agent"
-              style={{ borderRadius: '8px' }}
-              options={agents.map(agent => ({
-                label: agent.name,
-                value: agent.id
-              }))}
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="title"
-            label={<span style={{ fontWeight: 600 }}>对话标题</span>}
-          >
-            <Input
-              placeholder="为这次对话起个名字（可选）"
-              style={{ borderRadius: '8px', padding: '10px 12px' }}
-            />
-          </Form.Item>
-
-          <Form.Item style={{ marginBottom: 0, textAlign: 'right', marginTop: '24px' }}>
-            <Button
-              onClick={() => setNewSessionModalOpen(false)}
-              style={{
-                marginRight: '12px',
-                borderRadius: '8px',
-                padding: '6px 20px',
-                height: 'auto'
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              type="primary"
-              htmlType="submit"
-              icon={<PlusOutlined />}
-              style={{
-                borderRadius: '8px',
-                padding: '6px 20px',
-                height: 'auto',
-                fontWeight: 600,
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                border: 'none'
-              }}
-            >
-              创建对话
-            </Button>
-          </Form.Item>
-        </Form>
-      </Modal>
+        {/* 新建对话模态框（不再需要选择 Agent，暂时隐藏） */}
+        {/* 保留结构以便未来扩展标题等 */}
+        <Modal open={false} footer={null} />
       </div>
     </ConfigProvider>
   );

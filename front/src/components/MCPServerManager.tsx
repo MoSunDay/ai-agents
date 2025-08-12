@@ -46,8 +46,11 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
     setModalOpen(true);
   };
 
+  const [saving, setSaving] = useState(false);
+
   const handleSave = async (values: any) => {
     try {
+      setSaving(true);
       if (editingServer) {
         await mcpApi.updateServer(editingServer.id, values);
         message.success('MCP 服务器更新成功');
@@ -59,9 +62,12 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
       form.resetFields();
       setEditingServer(null);
       loadServers();
-    } catch (error) {
-      message.error('保存 MCP 服务器失败');
+    } catch (error: any) {
+      const detail = error?.detail;
+      message.error(detail?.message || error?.message || '保存 MCP 服务器失败');
       console.error('Error saving MCP server:', error);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -282,6 +288,7 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
             <Button
               type="primary"
               htmlType="submit"
+              loading={saving}
               style={{
                 borderRadius: '8px',
                 padding: '6px 20px',
@@ -291,7 +298,7 @@ const MCPServerManager: React.FC<MCPServerManagerProps> = ({ onServersChange }) 
                 border: 'none'
               }}
             >
-              {editingServer ? '更新' : '创建'}
+              {editingServer ? (saving ? '更新中…' : '更新') : (saving ? '创建中…' : '创建')}
             </Button>
           </Form.Item>
         </Form>

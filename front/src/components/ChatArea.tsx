@@ -9,7 +9,7 @@ const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 const ChatArea: React.FC = () => {
-  const { currentAgent, currentSession, addMessage } = useAppStore();
+  const { currentAgent, currentSession, addMessage, updateMessage, appendToMessage } = useAppStore();
   const [inputMessage, setInputMessage] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -18,7 +18,12 @@ const ChatArea: React.FC = () => {
     const content = inputMessage.trim();
     if (!content) return;
 
-    // 追加用户消息
+    const scrollToBottom = () => {
+      const el = document.getElementById('chat-scroll');
+      if (el) el.scrollTop = el.scrollHeight;
+    };
+
+    // 1) 先追加用户消息
     addMessage(currentSession.id, {
       id: Date.now().toString(),
       role: 'user',
@@ -30,11 +35,21 @@ const ChatArea: React.FC = () => {
     setSending(true);
 
     try {
-      // 组装历史消息（不包括系统提示词，后端会加）
+      // 2) 组装历史消息（不包括系统提示词，后端会加）
       const history = useAppStore.getState().currentSession?.messages.map(m => ({ role: m.role, content: m.content })) || [];
       const payload = { agent_id: currentAgent.id, messages: history };
 
-      // 优先尝试流式
+      // 3) 先插入一个空的 assistant 占位消息，用于流式增量更新
+      const replyId = `reply-${Date.now()}`;
+      addMessage(currentSession.id, {
+        id: replyId,
+        role: 'assistant',
+        content: '思考中...'
+        ,
+        created_at: new Date().toISOString(),
+      });
+
+      // 4) 优先尝试流式
       const resp = await fetch(`${API_BASE_URL}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -45,20 +60,17 @@ const ChatArea: React.FC = () => {
         // 回退到非流式
         const noStream = await chatApi.sendMessage(payload);
         const replyText = typeof noStream === 'string' ? noStream : (noStream.content || JSON.stringify(noStream));
-        addMessage(currentSession.id, {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: replyText,
-          created_at: new Date().toISOString(),
-        });
+        // 用占位回复更新为最终文本
+        updateMessage(currentSession.id, replyId, { content: replyText });
+        scrollToBottom();
         return;
       }
 
-      // 读取 SSE data: 流
+      // 5) 读取 SSE data: 流，边到边渲染
       const reader = resp.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
-      let acc = '';
+      let received = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -66,26 +78,66 @@ const ChatArea: React.FC = () => {
         buffer += decoder.decode(value, { stream: true });
 
         let idx;
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const raw = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 2);
-          if (!raw.startsWith('data:')) continue;
-          const data = raw.slice(5).trim();
-          if (data === '[DONE]') {
-            break;
+        while (true) {
+          idx = buffer.indexOf('\n\n');
+          let sepLen = 2;
+          if (idx === -1) {
+            idx = buffer.indexOf('\r\n\r\n');
+            sepLen = idx === -1 ? -1 : 4;
           }
-          // 累积文本片段（后端当前返回的是文本增量）
-          acc += data;
+          if (idx === -1) break;
+          const raw = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + sepLen);
+          if (!raw.startsWith('data:')) continue;
+          // 有些实现会在一个事件块里包含多行 data: 或者拼接多个 data:
+          const segments = raw
+            .split(/\r?\n+/)               // 先按换行拆分
+            .flatMap(l => l.split(/(?=data:\s*)/)) // 再按 data: 边界切分
+            .map(s => s.replace(/^data:\s*/, '').trim())
+            .filter(s => s.length > 0);
+
+          let done = false;
+          for (const seg of segments) {
+            if (seg === '[DONE]') { done = true; break; }
+
+            // 解析 OpenAI chunk JSON，提取 choices[0].delta.content
+            let text = '';
+            try {
+              const j = JSON.parse(seg);
+              text = j?.choices?.[0]?.delta?.content ?? '';
+              if (!text && j?.choices?.[0]?.message?.content) {
+                text = j.choices[0].message.content;
+              }
+            } catch {
+              // 非 JSON（例如后端直接推送纯文本增量），直接当作文本
+              text = seg;
+            }
+
+            // 过滤思考标记与空片段
+            if (text) {
+              const cleaned = text.replace(/<\/?think>/g, '');
+              if (cleaned) {
+                if (!received) {
+                  // 第一次收到内容时，清空占位“思考中...”
+                  updateMessage(currentSession.id, replyId, { content: '' });
+                }
+                appendToMessage(currentSession.id, replyId, cleaned);
+                received = true;
+                scrollToBottom();
+              }
+            }
+          }
+          if (done) break;
         }
       }
 
-      addMessage(currentSession.id, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: acc || '[空响应]',
-        created_at: new Date().toISOString(),
-      });
+      // 若未收到任何片段，给一个兜底文案
+      if (!received) {
+        updateMessage(currentSession.id, replyId, { content: '[空响应]' });
+      }
     } catch (err: any) {
+      // 出错时把占位消息替换为错误信息
+      updateMessage(currentSession.id, `reply-${Date.now()}`, { content: err?.message || '发送失败' });
       antdMessage.error(err?.message || '发送失败');
     } finally {
       setSending(false);
