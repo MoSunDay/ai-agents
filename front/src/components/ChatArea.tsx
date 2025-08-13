@@ -8,6 +8,70 @@ import { API_BASE_URL } from '../services/api';
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
+// 渲染带有思考标记和 MCP 工具调用的消息内容
+const renderMessageContent = (content: string) => {
+  // 先处理 <think>...</think> 和 <mcp>...</mcp> 标记
+  const parts = content.split(/(<think>[\s\S]*?<\/think>|<mcp>[\s\S]*?<\/mcp>)/g);
+
+  return parts.map((part, index) => {
+    if (part.match(/^<think>[\s\S]*?<\/think>$/)) {
+      // 这是思考内容，用特殊样式显示
+      const thinkContent = part.replace(/<\/?think>/g, '');
+      return (
+        <div key={index} style={{
+          backgroundColor: '#f6f8fa',
+          border: '1px solid #d1d9e0',
+          borderRadius: '6px',
+          padding: '8px 12px',
+          margin: '4px 0',
+          fontSize: '13px',
+          color: '#656d76',
+          fontStyle: 'italic',
+          position: 'relative'
+        }}>
+          <div style={{
+            fontSize: '11px',
+            color: '#8b949e',
+            marginBottom: '4px',
+            fontWeight: 500
+          }}>
+            💭 AI 思考过程
+          </div>
+          {thinkContent}
+        </div>
+      );
+    } else if (part.match(/^<mcp>[\s\S]*?<\/mcp>$/)) {
+      // 这是 MCP 工具调用内容，用不同的样式显示
+      const mcpContent = part.replace(/<\/?mcp>/g, '');
+      return (
+        <div key={index} style={{
+          backgroundColor: '#fff3cd',
+          border: '1px solid #ffeaa7',
+          borderRadius: '6px',
+          padding: '8px 12px',
+          margin: '4px 0',
+          fontSize: '13px',
+          color: '#856404',
+          fontFamily: 'Monaco, Consolas, "Courier New", monospace'
+        }}>
+          <div style={{
+            fontSize: '11px',
+            color: '#b8860b',
+            marginBottom: '4px',
+            fontWeight: 500
+          }}>
+            🔧 MCP 工具调用
+          </div>
+          {mcpContent}
+        </div>
+      );
+    } else {
+      // 这是正常内容
+      return <span key={index}>{part}</span>;
+    }
+  });
+};
+
 const ChatArea: React.FC = () => {
   const { currentAgent, currentSession, addMessage, updateMessage, appendToMessage } = useAppStore();
   const [inputMessage, setInputMessage] = useState('');
@@ -113,15 +177,17 @@ const ChatArea: React.FC = () => {
               text = seg;
             }
 
-            // 过滤思考标记与空片段
-            if (text) {
-              const cleaned = text.replace(/<\/?think>/g, '');
-              if (cleaned) {
+            // 过滤思考标记，但保留空格和其他内容
+            if (text !== undefined && text !== null) {
+              // 保留所有内容，包括 <think> 标签，不做任何过滤
+
+              // 即使是空格也要保留，只过滤掉纯标签内容
+              if (text !== '') {
                 if (!received) {
                   // 第一次收到内容时，清空占位“思考中...”
                   updateMessage(currentSession.id, replyId, { content: '' });
                 }
-                appendToMessage(currentSession.id, replyId, cleaned);
+                appendToMessage(currentSession.id, replyId, text);
                 received = true;
                 scrollToBottom();
               }
@@ -226,7 +292,7 @@ const ChatArea: React.FC = () => {
                     wordBreak: 'break-word',
                     boxShadow: message.role === 'user' ? 'none' : '0 1px 3px rgba(0,0,0,0.06)'
                   }}>
-                    {message.content}
+                    {renderMessageContent(message.content)}
                   </div>
                   <div style={{
                     fontSize: '12px',

@@ -5,6 +5,7 @@ from models import Agent, MCPServer
 from utils import success_response, error_response, validate_agent_data, parse_request_json
 from handler import AgentHandler
 import json
+import asyncio
 
 # 创建 handler 实例
 agent_handler = AgentHandler()
@@ -132,7 +133,6 @@ async def send_message(request: Request):
 @api.route("/chat/stream", methods=["POST"])
 async def send_message_stream(request: Request):
     """发送消息并流式获取回复 - 使用 SSE 风格 data: 行输出"""
-    from sanic.response import stream as sanic_stream
     try:
         data = parse_request_json(request)
         agent_id = data.get("agent_id")
@@ -143,16 +143,19 @@ async def send_message_stream(request: Request):
         if not messages:
             return error_response("缺少 messages 参数", 400)
 
-        async def streaming_fn(resp):
+        # 使用真正的 agent_handler 流式处理
+        async def streaming_fn(response):
             try:
                 async for chunk in agent_handler.process_message_stream(agent_id, messages):
                     # 将文本增量以 SSE data: 行写出
-                    await resp.write(f"data: {chunk}\n\n")
-                await resp.write("data: [DONE]\n\n")
+                    await response.write(f"data: {chunk}\n\n")
+                await response.write("data: [DONE]\n\n")
             except Exception as e:
-                await resp.write(f"data: [ERROR] {str(e)}\n\n")
+                # 如果真实 API 失败，返回错误信息
+                await response.write(f"data: [ERROR] {str(e)}\n\n")
 
-        return await sanic_stream(streaming_fn, content_type="text/event-stream; charset=utf-8")
+        from sanic.response import ResponseStream
+        return ResponseStream(streaming_fn, content_type="text/event-stream; charset=utf-8")
     except Exception as e:
         return error_response(f"流式发送消息失败: {str(e)}", 500)
 
